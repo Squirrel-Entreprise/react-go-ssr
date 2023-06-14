@@ -1,4 +1,4 @@
-module lab/ssr
+module github.com/Squirrel-Entreprise/react-go-ssr
 
 go 1.20
 
