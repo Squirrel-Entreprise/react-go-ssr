@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net/url"
@@ -12,24 +13,29 @@ import (
 	"github.com/go-rod/rod"
 )
 
-var baseURL string
+var (
+	baseURL   string
+	outPutDir string
+	waitPage  time.Duration
+)
+
+func init() {
+	flag.StringVar(&baseURL, "h", "", "base URL e.g. http://localhost:3000")
+	flag.StringVar(&outPutDir, "o", "outhtml", "output directory")
+	flag.DurationVar(&waitPage, "w", 2*time.Second, "wait on page")
+
+	flag.Parse()
+}
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Println("Usage: go run main.go <url>")
-		os.Exit(1)
-	}
 
 	visitedPages := make(map[string]bool)
 
-	website := os.Args[1]
-	u, err := url.Parse(website)
+	u, err := url.Parse(baseURL)
 	if err != nil {
 		fmt.Printf("failed to parse URL: %v\n", err)
 		os.Exit(1)
 	}
-
-	baseURL = website
 
 	browser := rod.New().MustConnect()
 	defer browser.MustClose()
@@ -44,7 +50,6 @@ func main() {
 func visitPage(wg *sync.WaitGroup, browser *rod.Browser, pageURL, path string, visitedPages map[string]bool) {
 	defer wg.Done()
 
-	// Vérifier si la page a déjà été visitée
 	if visitedPages[pageURL] {
 		return
 	}
@@ -53,18 +58,14 @@ func visitPage(wg *sync.WaitGroup, browser *rod.Browser, pageURL, path string, v
 
 	log.Println("Visiting", pageURL)
 
-	page := browser.MustPage(pageURL).MustWaitLoad()
+	page := browser.MustPage(pageURL).MustWaitLoad().MustWaitIdle()
 
-	page = page.MustWaitIdle()
+	time.Sleep(waitPage)
 
-	time.Sleep(10 * time.Second)
-
-	// Save the page content
 	content := page.MustHTML()
 
-	saveFile("outhtml/"+path, content)
+	saveFile(outPutDir+"/"+path, content)
 
-	// Find all the internal links on the page
 	links := page.MustElements("a")
 	for _, link := range links {
 		href, err := link.Attribute("href")
@@ -73,7 +74,6 @@ func visitPage(wg *sync.WaitGroup, browser *rod.Browser, pageURL, path string, v
 			continue
 		}
 
-		// Ignore if href is nil or an external link
 		if href == nil || !strings.HasPrefix(*href, "/") {
 			continue
 		}
