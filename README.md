@@ -10,7 +10,7 @@ React Go SSR a été développé dans le but de fournir une alternative performa
 
 Pour utiliser React Go SSR, suivez les étapes suivantes :
 
-1. Installez les dépendances requises. Go 1.20 ou supérieur est requis.
+1. Installez les dépendances requises. Go 1.20 ou supérieur est requis ainsi Chomium ou Google Chome
 
 ```bash
 go mod tidy

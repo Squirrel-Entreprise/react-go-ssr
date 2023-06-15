@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
 )
 
 var (
@@ -37,7 +38,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	browser := rod.New().MustConnect()
+	path, ok := launcher.LookPath()
+	if !ok {
+		fmt.Printf("failed to find chrome: %v\n", err)
+		os.Exit(1)
+	}
+	l := launcher.New().Bin(path).MustLaunch()
+
+	browser := rod.New().ControlURL(l).MustConnect()
 	defer browser.MustClose()
 
 	var wg sync.WaitGroup
