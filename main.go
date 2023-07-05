@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -18,23 +17,18 @@ var (
 	baseURL      string
 	outPutDir    string
 	waitPage     time.Duration
-	thread       int
 	visitedPages = make(map[string]bool)
-	mu           = &sync.Mutex{}
 )
 
 func init() {
 	flag.StringVar(&baseURL, "h", "", "base URL e.g. http://localhost:3000")
 	flag.StringVar(&outPutDir, "o", "outhtml", "output directory")
 	flag.DurationVar(&waitPage, "w", 2*time.Second, "wait on page")
-	flag.IntVar(&thread, "c", 2, "concurrent thread")
 
 	flag.Parse()
 }
 
 func main() {
-
-	sem := make(chan bool, thread)
 
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -57,58 +51,21 @@ func main() {
 	browser := rod.New().ControlURL(l).MustConnect()
 	defer browser.MustClose()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	visitPage(sem, &wg, browser, u.String(), "index", visitedPages)
+	visitPage(browser, u.String(), "index", visitedPages)
 
-	wg.Wait()
 }
 
-func visitPage(sem chan bool, wg *sync.WaitGroup, browser *rod.Browser, pageURL, path string, visitedPages map[string]bool) {
-	defer wg.Done()
-	defer func() { <-sem }()
+func visitPage(browser *rod.Browser, pageURL, path string, visitedPages map[string]bool) {
 
-	mu.Lock()
-	visited := visitedPages[pageURL]
-	if !visited {
-		visitedPages[pageURL] = true
-	}
-	mu.Unlock()
-
-	if visited {
+	if ok := visitedPages[pageURL]; ok {
 		return
 	}
-
-	sem <- true
 
 	visitedPages[pageURL] = true
 
 	log.Println("Visiting", pageURL)
 
-	var page *rod.Page
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Println("Recovered in f", r)
-				log.Printf("failed to visit page %v: %v", pageURL, r)
-			}
-		}()
-		page = browser.MustPage(pageURL)
-	}()
-
-	if page == nil {
-		return
-	}
-
-	if err := page.WaitLoad(); err != nil {
-		log.Printf("failed to load page %v: %v", pageURL, err)
-		return
-	}
-
-	if err := page.WaitIdle(30 * time.Second); err != nil {
-		log.Printf("failed to wait for page idle %v: %v", pageURL, err)
-		return
-	}
+	page := browser.MustPage(pageURL).MustWaitLoad().MustWaitIdle()
 
 	time.Sleep(waitPage)
 
@@ -133,11 +90,7 @@ func visitPage(sem chan bool, wg *sync.WaitGroup, browser *rod.Browser, pageURL,
 			continue
 		}
 
-		wg.Add(1)
-		go func() {
-			visitPage(sem, wg, browser, baseURL+*href, strings.Trim(u.Path, "/"), visitedPages)
-			<-sem
-		}()
+		visitPage(browser, baseURL+*href, strings.Trim(u.Path, "/"), visitedPages)
 	}
 }
 
