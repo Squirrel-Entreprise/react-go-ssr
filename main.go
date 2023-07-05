@@ -3,12 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,22 +15,26 @@ import (
 )
 
 var (
-	baseURL   string
-	outPutDir string
-	waitPage  time.Duration
+	baseURL      string
+	outPutDir    string
+	waitPage     time.Duration
+	thread       int
+	visitedPages = make(map[string]bool)
+	mu           = &sync.Mutex{}
 )
 
 func init() {
 	flag.StringVar(&baseURL, "h", "", "base URL e.g. http://localhost:3000")
 	flag.StringVar(&outPutDir, "o", "outhtml", "output directory")
 	flag.DurationVar(&waitPage, "w", 2*time.Second, "wait on page")
+	flag.IntVar(&thread, "c", 2, "concurrent thread")
 
 	flag.Parse()
 }
 
 func main() {
 
-	visitedPages := make(map[string]bool)
+	sem := make(chan bool, thread)
 
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -43,7 +44,7 @@ func main() {
 
 	path, ok := launcher.LookPath()
 	if !ok {
-		fmt.Printf("failed to find chrome: %v\n", err)
+		fmt.Printf("failed to find chrome\n")
 		os.Exit(1)
 	}
 
@@ -58,45 +59,62 @@ func main() {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	visitPage(&wg, browser, u.String(), "index", visitedPages)
+	visitPage(sem, &wg, browser, u.String(), "index", visitedPages)
 
 	wg.Wait()
 }
 
-func visitPage(wg *sync.WaitGroup, browser *rod.Browser, pageURL, path string, visitedPages map[string]bool) {
+func visitPage(sem chan bool, wg *sync.WaitGroup, browser *rod.Browser, pageURL, path string, visitedPages map[string]bool) {
 	defer wg.Done()
+	defer func() { <-sem }()
 
-	if visitedPages[pageURL] {
+	mu.Lock()
+	visited := visitedPages[pageURL]
+	if !visited {
+		visitedPages[pageURL] = true
+	}
+	mu.Unlock()
+
+	if visited {
 		return
 	}
+
+	sem <- true
 
 	visitedPages[pageURL] = true
 
 	log.Println("Visiting", pageURL)
 
-	page := browser.MustPage(pageURL).MustWaitLoad().MustWaitIdle()
+	var page *rod.Page
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Println("Recovered in f", r)
+				log.Printf("failed to visit page %v: %v", pageURL, r)
+			}
+		}()
+		page = browser.MustPage(pageURL)
+	}()
+
+	if page == nil {
+		return
+	}
+
+	if err := page.WaitLoad(); err != nil {
+		log.Printf("failed to load page %v: %v", pageURL, err)
+		return
+	}
+
+	if err := page.WaitIdle(30 * time.Second); err != nil {
+		log.Printf("failed to wait for page idle %v: %v", pageURL, err)
+		return
+	}
 
 	time.Sleep(waitPage)
 
 	content := page.MustHTML()
 
 	saveFile(outPutDir+"/"+path, content)
-
-	// Save assets
-	elements, err := page.Elements("*")
-	if err != nil {
-		log.Fatalf("failed to get elements: %v", err)
-	}
-	for _, element := range elements {
-		src, _ := element.Attribute("src")
-		href, _ := element.Attribute("href")
-		if src != nil {
-			saveAsset(*src)
-		}
-		if href != nil {
-			saveAsset(*href)
-		}
-	}
 
 	links := page.MustElements("a")
 	for _, link := range links {
@@ -116,12 +134,14 @@ func visitPage(wg *sync.WaitGroup, browser *rod.Browser, pageURL, path string, v
 		}
 
 		wg.Add(1)
-		go visitPage(wg, browser, baseURL+*href, strings.Trim(u.Path, "/"), visitedPages)
+		go func() {
+			visitPage(sem, wg, browser, baseURL+*href, strings.Trim(u.Path, "/"), visitedPages)
+			<-sem
+		}()
 	}
 }
 
 func saveFile(path, content string) {
-	path += ".html"
 	os.MkdirAll(getDir(path), os.ModePerm)
 	file, err := os.Create(path)
 	if err != nil {
@@ -131,42 +151,6 @@ func saveFile(path, content string) {
 	defer file.Close()
 
 	file.WriteString(content)
-}
-
-func saveAsset(assetURL string) {
-	base, err := url.Parse(baseURL)
-	if err != nil {
-		log.Fatalf("failed to parse base url: %v", err)
-	}
-	relative, err := url.Parse(assetURL)
-	if err != nil {
-		log.Fatalf("failed to parse asset url: %v", err)
-	}
-
-	// If the asset's URL is not from the same domain, skip it.
-	if relative.Host != "" && relative.Host != base.Host {
-		return
-	}
-
-	// Resolve to absolute URL
-	absolute := base.ResolveReference(relative)
-
-	path := outPutDir + absolute.Path
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// Download and save the asset if it does not exist
-		resp, err := http.Get(absolute.String())
-		if err != nil {
-			log.Fatalf("failed to download asset: %v", err)
-		}
-		defer resp.Body.Close()
-		os.MkdirAll(filepath.Dir(path), os.ModePerm)
-		file, err := os.Create(path)
-		if err != nil {
-			log.Fatalf("failed to create file: %v", err)
-		}
-		defer file.Close()
-		io.Copy(file, resp.Body)
-	}
 }
 
 func getDir(filePath string) string {
