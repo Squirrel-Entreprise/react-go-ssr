@@ -3,9 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -43,7 +46,12 @@ func main() {
 		fmt.Printf("failed to find chrome: %v\n", err)
 		os.Exit(1)
 	}
-	l := launcher.New().Bin(path).MustLaunch()
+
+	l, err := launcher.New().Bin(path).Launch()
+	if err != nil {
+		fmt.Printf("failed to launch chrome: %v\n", err)
+		os.Exit(1)
+	}
 
 	browser := rod.New().ControlURL(l).MustConnect()
 	defer browser.MustClose()
@@ -73,6 +81,22 @@ func visitPage(wg *sync.WaitGroup, browser *rod.Browser, pageURL, path string, v
 	content := page.MustHTML()
 
 	saveFile(outPutDir+"/"+path, content)
+
+	// Save assets
+	elements, err := page.Elements("*")
+	if err != nil {
+		log.Fatalf("failed to get elements: %v", err)
+	}
+	for _, element := range elements {
+		src, _ := element.Attribute("src")
+		href, _ := element.Attribute("href")
+		if src != nil {
+			saveAsset(*src)
+		}
+		if href != nil {
+			saveAsset(*href)
+		}
+	}
 
 	links := page.MustElements("a")
 	for _, link := range links {
@@ -107,6 +131,42 @@ func saveFile(path, content string) {
 	defer file.Close()
 
 	file.WriteString(content)
+}
+
+func saveAsset(assetURL string) {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		log.Fatalf("failed to parse base url: %v", err)
+	}
+	relative, err := url.Parse(assetURL)
+	if err != nil {
+		log.Fatalf("failed to parse asset url: %v", err)
+	}
+
+	// If the asset's URL is not from the same domain, skip it.
+	if relative.Host != "" && relative.Host != base.Host {
+		return
+	}
+
+	// Resolve to absolute URL
+	absolute := base.ResolveReference(relative)
+
+	path := outPutDir + absolute.Path
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// Download and save the asset if it does not exist
+		resp, err := http.Get(absolute.String())
+		if err != nil {
+			log.Fatalf("failed to download asset: %v", err)
+		}
+		defer resp.Body.Close()
+		os.MkdirAll(filepath.Dir(path), os.ModePerm)
+		file, err := os.Create(path)
+		if err != nil {
+			log.Fatalf("failed to create file: %v", err)
+		}
+		defer file.Close()
+		io.Copy(file, resp.Body)
+	}
 }
 
 func getDir(filePath string) string {
