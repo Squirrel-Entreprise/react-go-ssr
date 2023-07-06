@@ -65,7 +65,20 @@ func visitPage(browser *rod.Browser, pageURL, path string, visitedPages map[stri
 
 	log.Println("Visiting", pageURL)
 
-	page := browser.MustPage(pageURL).MustWaitLoad().MustWaitIdle()
+	var page *rod.Page
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Println("Recovered in f", r)
+				log.Printf("failed to visit page %v: %v", pageURL, r)
+			}
+		}()
+		page = browser.MustPage(pageURL).MustWaitLoad().MustWaitIdle()
+	}()
+
+	if page == nil {
+		return
+	}
 
 	time.Sleep(waitPage)
 

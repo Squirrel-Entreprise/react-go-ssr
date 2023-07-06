@@ -36,43 +36,18 @@ if (rootElement.hasChildNodes()) {
 
 ### Dockerfile
 ```Dockerfile
-# Build environment
-FROM node:18 as builder
-WORKDIR /usr/src/app
-
-ENV PATH /usr/src/app/node_modules/.bin:$PATH
-COPY package.* yarn.* ./
-RUN npm install
-COPY . ./
-RUN npm run build
+[... React build]
 
 # SSR STUFF
-# - Installer chromium
-RUN apt-get update && apt-get install -y chromium
-# - Téléchargement et extraction de React Go SSR
-RUN curl -LO https://github.com/Squirrel-Entreprise/react-go-ssr/releases/download/v1.1.4/react-go-ssr_1.1.4_linux_amd64.tar.gz \
-    && tar -xzf react-go-ssr_1.1.4_linux_amd64.tar.gz \
-    && rm react-go-ssr_1.1.4_linux_amd64.tar.gz
-# - Rendre le binaire exécutable
-RUN chmod +x ./react-go-ssr
-# - Installer serve pour rendre les fichiers React
-RUN npm i -g serve
-# Demarrer le serveur temporairement
-RUN serve -s build -l 3000 &
-# - Lancer la generation des fichiers SSR
-RUN ./react-go-ssr -h http://localhost:3000 -o build -w 3s
-# - Arreter le serveur
-RUN pkill -f serve
+# Copier le script dans le conteneur
+COPY ./ssr-stuff.sh /usr/src/app/ssr-stuff.sh
+# Rendre le script exécutable
+RUN chmod +x /usr/src/app/ssr-stuff.sh
+# Exécuter le script
+RUN /usr/src/app/ssr-stuff.sh
 # END SSR STUFF
 
-# Production environment
-FROM nginx
-RUN rm -rf /etc/nginx/conf.d
-RUN mkdir -p /etc/nginx/conf.d
-COPY ./default.conf /etc/nginx/conf.d/
-COPY --from=builder /usr/src/app/build /usr/share/nginx/html
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+[... Nginx]
 ```
 
 ## Contribuer
