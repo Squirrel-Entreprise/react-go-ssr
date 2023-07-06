@@ -14,10 +14,9 @@ import (
 )
 
 var (
-	baseURL      string
-	outPutDir    string
-	waitPage     time.Duration
-	visitedPages = make(map[string]bool)
+	baseURL   string
+	outPutDir string
+	waitPage  time.Duration
 )
 
 func init() {
@@ -51,18 +50,38 @@ func main() {
 	browser := rod.New().ControlURL(l).MustConnect()
 	defer browser.MustClose()
 
-	visitPage(browser, u.String(), "index", visitedPages)
+	// Use a map to keep track of visited pages.
+	visitedPages := make(map[string]bool)
 
+	// Start with a single page in the queue.
+	queue := []string{u.String()}
+
+	for len(queue) > 0 {
+		// Take the next page from the queue.
+		pageURL := queue[0]
+		queue = queue[1:]
+
+		// Skip this page if we've visited it already.
+		if visitedPages[pageURL] {
+			continue
+		}
+
+		// Mark this page as visited.
+		visitedPages[pageURL] = true
+
+		// Visit the page and get the links.
+		newLinks, err := visitPage(browser, pageURL)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+
+		// Add the new links to the queue.
+		queue = append(queue, newLinks...)
+	}
 }
 
-func visitPage(browser *rod.Browser, pageURL, path string, visitedPages map[string]bool) {
-
-	if ok := visitedPages[pageURL]; ok {
-		return
-	}
-
-	visitedPages[pageURL] = true
-
+func visitPage(browser *rod.Browser, pageURL string) ([]string, error) {
 	log.Println("Visiting", pageURL)
 
 	var page *rod.Page
@@ -77,16 +96,29 @@ func visitPage(browser *rod.Browser, pageURL, path string, visitedPages map[stri
 	}()
 
 	if page == nil {
-		return
+		return nil, fmt.Errorf("failed to load page %v", pageURL)
 	}
+
+	defer page.MustClose()
 
 	time.Sleep(waitPage)
 
 	content := page.MustHTML()
 
+	// Create a valid file path from the URL
+	u, err := url.Parse(pageURL)
+	if err != nil {
+		return nil, err
+	}
+	path := strings.Trim(u.Path, "/")
+	if path == "" {
+		path = "index"
+	}
+
 	saveFile(outPutDir+"/"+path, content)
 
 	links := page.MustElements("a")
+	newLinks := []string{}
 	for _, link := range links {
 		href, err := link.Attribute("href")
 		if err != nil {
@@ -98,13 +130,10 @@ func visitPage(browser *rod.Browser, pageURL, path string, visitedPages map[stri
 			continue
 		}
 
-		u, err := url.Parse(*href)
-		if err != nil {
-			continue
-		}
-
-		visitPage(browser, baseURL+*href, strings.Trim(u.Path, "/"), visitedPages)
+		newLinks = append(newLinks, baseURL+*href)
 	}
+
+	return newLinks, nil
 }
 
 func saveFile(path, content string) {
